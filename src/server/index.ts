@@ -134,7 +134,8 @@ Environment:
 }
 
 const invokedDirectly = process.argv[1] && new URL(import.meta.url).pathname.replace(/^\/(.:)/, "$1") === process.argv[1].replaceAll("\\", "/");
-const runningAsCompiledBunExecutable = Boolean((globalThis as Record<string, unknown>).Bun) && import.meta.url.includes("$bunfs");
+const runningAsCompiledBunExecutable = Boolean((globalThis as Record<string, unknown>).Bun)
+  && !/\.[cm]?[jt]sx?$/i.test(process.argv[1] ?? "");
 if (invokedDirectly || runningAsCompiledBunExecutable) {
   main().catch((error) => {
     console.error("[audio-studio] Fatal error:", error);
