@@ -1,12 +1,35 @@
-import type { Effect, StudioProject, Track } from "../shared/types.js";
+import type { AudioClip, Effect, EffectType, StudioProject, Track } from "../shared/types.js";
 
 type ActiveSource = AudioScheduledSourceNode;
+
+interface EffectRuntime {
+  id: string;
+  type: EffectType;
+  input: GainNode;
+  output: GainNode;
+  dry: GainNode;
+  wet: GainNode;
+  nodes: AudioNode[];
+  filter?: BiquadFilterNode;
+  delay?: DelayNode;
+  feedback?: GainNode;
+  convolver?: ConvolverNode;
+  damping?: BiquadFilterNode;
+  preDelay?: DelayNode;
+  shaper?: WaveShaperNode;
+  compressor?: DynamicsCompressorNode;
+  lfo?: OscillatorNode;
+  lfoDepth?: GainNode;
+  impulseSize?: number;
+}
 
 interface TrackOutput {
   input: GainNode;
   gain: GainNode;
   panner: StereoPannerNode;
-  nodes: AudioNode[];
+  eq: BiquadFilterNode[];
+  effects: Map<string, EffectRuntime>;
+  topology: string;
 }
 
 function midiFrequency(note: number): number {
@@ -19,6 +42,10 @@ function dataUrlBytes(dataUrl: string): ArrayBuffer {
   const bytes = new Uint8Array(binary.length);
   for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
   return bytes.buffer;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
 }
 
 export class AudioEngine {
@@ -56,23 +83,12 @@ export class AudioEngine {
     await this.ensureContext();
     this.updateProject(project);
     this.currentStep = Math.max(project.transport.loopStart, Math.min(project.transport.loopEnd - 1, fromStep));
-    const tick = (): void => {
-      const current = this.project;
-      if (!current) return;
-      if (this.currentStep < current.transport.loopStart || this.currentStep >= current.transport.loopEnd) {
-        this.currentStep = current.transport.loopStart;
-      }
-      this.scheduleStep(current, this.currentStep);
-      this.onStep(this.currentStep);
-      this.currentStep += 1;
-      if (this.currentStep >= current.transport.loopEnd) this.currentStep = current.transport.loopStart;
-    };
-    tick();
-    const stepMs = 60_000 / project.transport.tempo / project.transport.stepsPerBeat;
-    this.timer = window.setInterval(tick, stepMs);
+    this.tick();
+    this.restartTimer();
   }
 
   updateProject(project: StudioProject): void {
+    const previousStepMs = this.project ? this.stepMilliseconds(this.project) : undefined;
     this.project = project;
     const context = this.context;
     if (!context) return;
@@ -82,13 +98,16 @@ export class AudioEngine {
     for (const [trackId, output] of this.trackOutputs) {
       const track = project.tracks.find((entry) => entry.id === trackId);
       if (!track) {
-        for (const node of output.nodes) node.disconnect();
+        this.destroyTrackOutput(output);
         this.trackOutputs.delete(trackId);
         continue;
       }
-      output.panner.pan.setTargetAtTime(track.mixer.pan, context.currentTime, 0.01);
-      const volume = track.mixer.mute || (anySolo && !track.mixer.solo) ? 0 : track.mixer.volume;
-      output.gain.gain.setTargetAtTime(volume, context.currentTime, 0.01);
+      this.syncTrackOutput(output, track, anySolo);
+    }
+
+    const nextStepMs = this.stepMilliseconds(project);
+    if (this.timer !== undefined && previousStepMs !== undefined && Math.abs(previousStepMs - nextStepMs) > 0.01) {
+      this.restartTimer();
     }
   }
 
@@ -99,9 +118,7 @@ export class AudioEngine {
       try { source.stop(); } catch { /* already stopped */ }
     }
     this.sources.clear();
-    for (const output of this.trackOutputs.values()) {
-      for (const node of output.nodes) node.disconnect();
-    }
+    for (const output of this.trackOutputs.values()) this.destroyTrackOutput(output);
     this.trackOutputs.clear();
   }
 
@@ -113,6 +130,28 @@ export class AudioEngine {
     return Math.min(1, Math.sqrt(sum / this.meterData.length) * 2.8);
   }
 
+  private stepMilliseconds(project: StudioProject): number {
+    return 60_000 / project.transport.tempo / project.transport.stepsPerBeat;
+  }
+
+  private restartTimer(): void {
+    if (!this.project) return;
+    if (this.timer !== undefined) window.clearInterval(this.timer);
+    this.timer = window.setInterval(() => this.tick(), this.stepMilliseconds(this.project));
+  }
+
+  private tick(): void {
+    const current = this.project;
+    if (!current) return;
+    if (this.currentStep < current.transport.loopStart || this.currentStep >= current.transport.loopEnd) {
+      this.currentStep = current.transport.loopStart;
+    }
+    this.scheduleStep(current, this.currentStep);
+    this.onStep(this.currentStep);
+    this.currentStep += 1;
+    if (this.currentStep >= current.transport.loopEnd) this.currentStep = current.transport.loopStart;
+  }
+
   private scheduleStep(project: StudioProject, absoluteStep: number): void {
     const context = this.context;
     const master = this.master;
@@ -121,12 +160,15 @@ export class AudioEngine {
     const anySolo = project.tracks.some((track) => track.mixer.solo);
     for (const track of project.tracks) {
       if (track.mixer.mute || (anySolo && !track.mixer.solo)) continue;
-      const patternStep = absoluteStep % Math.max(1, track.steps.length);
+      const pattern = track.patterns?.find((entry) => absoluteStep >= entry.startStep && absoluteStep < entry.startStep + entry.lengthSteps);
+      const patternStep = pattern
+        ? (absoluteStep - pattern.startStep) % Math.max(1, track.steps.length)
+        : absoluteStep % Math.max(1, track.steps.length);
       const step = track.steps[patternStep];
-      if (track.type === "instrument" && step?.enabled) this.playVoice(track, step.note, step.velocity, step.gate, project);
-      for (const clip of track.clips.filter((entry) => entry.startStep === absoluteStep)) void this.playClip(track, clip.id, clip.dataUrl, clip.sourceUrl, clip.gain, project);
+      if (track.type === "instrument" && pattern && step?.enabled) this.playVoice(track, step.note, step.velocity, step.gate, project);
+      for (const clip of track.clips.filter((entry) => entry.startStep === absoluteStep)) void this.playClip(track, clip, project);
     }
-    if (project.transport.metronome && absoluteStep % project.transport.stepsPerBeat === 0) {
+    if (project.transport.metronome && project.tracks[0] && absoluteStep % project.transport.stepsPerBeat === 0) {
       const metronome = { ...project.tracks[0], instrument: { ...project.tracks[0].instrument, kind: "synth" as const, waveform: "square" as const }, effects: [] };
       this.playVoice(metronome, absoluteStep % (project.transport.stepsPerBeat * project.transport.numerator) === 0 ? 96 : 84, 0.16, 0.1, project);
     }
@@ -138,78 +180,196 @@ export class AudioEngine {
 
     const context = this.context!;
     const input = context.createGain();
-    const nodes: AudioNode[] = [input];
-    const head: AudioNode = input;
-    let tail = head;
-    const add = (node: AudioNode): void => { tail.connect(node); tail = node; nodes.push(node); };
-
     const eqFrequencies = [100, 500, 2500, 9000];
-    const eqValues = [track.eq.low, track.eq.lowMid, track.eq.highMid, track.eq.high];
-    eqFrequencies.forEach((frequency, index) => {
+    const eq = eqFrequencies.map((frequency, index) => {
       const node = context.createBiquadFilter();
       node.type = index === 0 ? "lowshelf" : index === 3 ? "highshelf" : "peaking";
       node.frequency.value = frequency;
       node.Q.value = 0.7;
-      node.gain.value = eqValues[index];
-      add(node);
+      return node;
     });
-    for (const effect of track.effects.filter((item) => item.enabled)) {
-      const node = this.effectNode(effect);
-      if (node) add(node);
-    }
-    const panner = context.createStereoPanner();
-    panner.pan.value = track.mixer.pan;
-    add(panner);
-    const gain = context.createGain();
-    add(gain);
-    tail.connect(this.master!);
-    const output = { input, gain, panner, nodes };
+    const output: TrackOutput = {
+      input,
+      gain: context.createGain(),
+      panner: context.createStereoPanner(),
+      eq,
+      effects: new Map(),
+      topology: "",
+    };
     this.trackOutputs.set(track.id, output);
-    const anySolo = project.tracks.some((entry) => entry.mixer.solo);
-    panner.pan.value = track.mixer.pan;
-    gain.gain.value = track.mixer.mute || (anySolo && !track.mixer.solo) ? 0 : track.mixer.volume;
+    this.syncTrackOutput(output, track, project.tracks.some((entry) => entry.mixer.solo));
     return input;
   }
 
-  private effectNode(effect: Effect): AudioNode | null {
+  private syncTrackOutput(output: TrackOutput, track: Track, anySolo: boolean): void {
     const context = this.context!;
+    const eqValues = [track.eq.low, track.eq.lowMid, track.eq.highMid, track.eq.high];
+    output.eq.forEach((node, index) => node.gain.setTargetAtTime(eqValues[index], context.currentTime, 0.01));
+
+    const enabledEffects = track.effects.filter((effect) => effect.enabled);
+    const topology = enabledEffects.map((effect) => `${effect.id}:${effect.type}`).join("|");
+    if (topology !== output.topology) this.rebuildEffectChain(output, enabledEffects);
+    for (const effect of enabledEffects) {
+      const runtime = output.effects.get(effect.id);
+      if (runtime) this.updateEffectRuntime(runtime, effect);
+    }
+
+    output.panner.pan.setTargetAtTime(track.mixer.pan, context.currentTime, 0.01);
+    const volume = track.mixer.mute || (anySolo && !track.mixer.solo) ? 0 : track.mixer.volume;
+    output.gain.gain.setTargetAtTime(volume, context.currentTime, 0.01);
+  }
+
+  private rebuildEffectChain(output: TrackOutput, effects: Effect[]): void {
+    output.input.disconnect();
+    output.eq.forEach((node) => node.disconnect());
+    output.panner.disconnect();
+    output.gain.disconnect();
+    for (const runtime of output.effects.values()) this.destroyEffectRuntime(runtime);
+    output.effects.clear();
+
+    let tail: AudioNode = output.input;
+    for (const node of output.eq) {
+      tail.connect(node);
+      tail = node;
+    }
+    for (const effect of effects) {
+      const runtime = this.createEffectRuntime(effect);
+      output.effects.set(effect.id, runtime);
+      tail.connect(runtime.input);
+      tail = runtime.output;
+    }
+    tail.connect(output.panner);
+    output.panner.connect(output.gain);
+    output.gain.connect(this.master!);
+    output.topology = effects.map((effect) => `${effect.id}:${effect.type}`).join("|");
+  }
+
+  private createEffectRuntime(effect: Effect): EffectRuntime {
+    const context = this.context!;
+    const input = context.createGain();
+    const output = context.createGain();
+    const dry = context.createGain();
+    const wet = context.createGain();
+    const runtime: EffectRuntime = { id: effect.id, type: effect.type, input, output, dry, wet, nodes: [input, output, dry, wet] };
+    input.connect(dry);
+    dry.connect(output);
+    wet.connect(output);
+
     if (effect.type === "filter") {
-      const node = context.createBiquadFilter();
-      node.type = "lowpass";
-      node.frequency.value = effect.parameters.cutoff ?? 8000;
-      node.Q.value = effect.parameters.resonance ?? 0.7;
-      return node;
+      runtime.filter = context.createBiquadFilter();
+      runtime.filter.type = "lowpass";
+      input.connect(runtime.filter);
+      runtime.filter.connect(wet);
+      runtime.nodes.push(runtime.filter);
+    } else if (effect.type === "distortion") {
+      runtime.shaper = context.createWaveShaper();
+      runtime.shaper.oversample = "2x";
+      input.connect(runtime.shaper);
+      runtime.shaper.connect(wet);
+      runtime.nodes.push(runtime.shaper);
+    } else if (effect.type === "compressor" || effect.type === "limiter") {
+      runtime.compressor = context.createDynamicsCompressor();
+      input.connect(runtime.compressor);
+      runtime.compressor.connect(wet);
+      runtime.nodes.push(runtime.compressor);
+    } else if (effect.type === "delay") {
+      runtime.delay = context.createDelay(2);
+      runtime.feedback = context.createGain();
+      input.connect(runtime.delay);
+      runtime.delay.connect(runtime.feedback);
+      runtime.feedback.connect(runtime.delay);
+      runtime.delay.connect(wet);
+      runtime.nodes.push(runtime.delay, runtime.feedback);
+    } else if (effect.type === "chorus") {
+      runtime.delay = context.createDelay(0.1);
+      runtime.lfo = context.createOscillator();
+      runtime.lfoDepth = context.createGain();
+      input.connect(runtime.delay);
+      runtime.delay.connect(wet);
+      runtime.lfo.connect(runtime.lfoDepth);
+      runtime.lfoDepth.connect(runtime.delay.delayTime);
+      runtime.lfo.start(context.currentTime);
+      runtime.nodes.push(runtime.delay, runtime.lfo, runtime.lfoDepth);
+    } else if (effect.type === "reverb") {
+      runtime.preDelay = context.createDelay(1);
+      runtime.convolver = context.createConvolver();
+      runtime.damping = context.createBiquadFilter();
+      runtime.damping.type = "lowpass";
+      input.connect(runtime.preDelay);
+      runtime.preDelay.connect(runtime.convolver);
+      runtime.convolver.connect(runtime.damping);
+      runtime.damping.connect(wet);
+      runtime.nodes.push(runtime.preDelay, runtime.convolver, runtime.damping);
     }
-    if (effect.type === "distortion") {
-      const node = context.createWaveShaper();
-      const drive = effect.parameters.drive ?? 1.8;
-      node.curve = Float32Array.from({ length: 1024 }, (_, index) => Math.tanh(((index / 512) - 1) * drive));
-      node.oversample = "2x";
-      return node;
+
+    this.updateEffectRuntime(runtime, effect);
+    return runtime;
+  }
+
+  private updateEffectRuntime(runtime: EffectRuntime, effect: Effect): void {
+    const context = this.context!;
+    const mix = clamp(effect.mix, 0, 1);
+    runtime.dry.gain.setTargetAtTime(Math.cos(mix * Math.PI / 2), context.currentTime, 0.01);
+    runtime.wet.gain.setTargetAtTime(Math.sin(mix * Math.PI / 2), context.currentTime, 0.01);
+
+    if (runtime.filter) {
+      runtime.filter.frequency.setTargetAtTime(clamp(effect.parameters.cutoff ?? 8000, 40, 20_000), context.currentTime, 0.015);
+      runtime.filter.Q.setTargetAtTime(clamp(effect.parameters.resonance ?? 0.7, 0.1, 24), context.currentTime, 0.015);
     }
-    if (effect.type === "compressor" || effect.type === "limiter") {
-      const node = context.createDynamicsCompressor();
-      node.threshold.value = effect.type === "limiter" ? -2 : effect.parameters.threshold ?? -18;
-      node.ratio.value = effect.type === "limiter" ? 18 : effect.parameters.ratio ?? 4;
-      return node;
+    if (runtime.shaper) {
+      const drive = clamp(effect.parameters.drive ?? 1.8, 0.1, 20);
+      runtime.shaper.curve = Float32Array.from({ length: 2048 }, (_, index) => Math.tanh(((index / 1024) - 1) * drive));
     }
-    if (effect.type === "delay" || effect.type === "chorus") {
-      const node = context.createDelay(2);
-      node.delayTime.value = effect.type === "chorus" ? 0.018 : effect.parameters.time ?? 0.25;
-      return node;
+    if (runtime.compressor) {
+      const limiter = effect.type === "limiter";
+      runtime.compressor.threshold.setTargetAtTime(limiter ? clamp(effect.parameters.ceiling ?? -0.8, -24, 0) : clamp(effect.parameters.threshold ?? -18, -60, 0), context.currentTime, 0.01);
+      runtime.compressor.ratio.setTargetAtTime(limiter ? 20 : clamp(effect.parameters.ratio ?? 4, 1, 20), context.currentTime, 0.01);
+      runtime.compressor.attack.setTargetAtTime(limiter ? 0.001 : clamp(effect.parameters.attack ?? 0.01, 0, 1), context.currentTime, 0.01);
+      runtime.compressor.release.setTargetAtTime(clamp(effect.parameters.release ?? (limiter ? 0.08 : 0.25), 0.01, 1), context.currentTime, 0.01);
     }
-    if (effect.type === "reverb") {
-      const convolver = context.createConvolver();
-      const seconds = 1.4 + (effect.parameters.size ?? 0.55) * 2;
-      const impulse = context.createBuffer(2, Math.floor(context.sampleRate * seconds), context.sampleRate);
-      for (let channel = 0; channel < 2; channel += 1) {
-        const data = impulse.getChannelData(channel);
-        for (let i = 0; i < data.length; i += 1) data[i] = (Math.random() * 2 - 1) * (1 - i / data.length) ** 2;
+    if (effect.type === "delay" && runtime.delay && runtime.feedback) {
+      runtime.delay.delayTime.setTargetAtTime(clamp(effect.parameters.time ?? 0.25, 0.01, 1.8), context.currentTime, 0.01);
+      runtime.feedback.gain.setTargetAtTime(clamp(effect.parameters.feedback ?? 0.28, 0, 0.92), context.currentTime, 0.01);
+    }
+    if (effect.type === "chorus" && runtime.delay && runtime.lfo && runtime.lfoDepth) {
+      runtime.delay.delayTime.setTargetAtTime(0.018, context.currentTime, 0.01);
+      runtime.lfo.frequency.setTargetAtTime(clamp(effect.parameters.rate ?? 0.8, 0.05, 10), context.currentTime, 0.01);
+      runtime.lfoDepth.gain.setTargetAtTime(clamp(effect.parameters.depth ?? 0.25, 0, 1) * 0.012, context.currentTime, 0.01);
+    }
+    if (runtime.convolver && runtime.damping && runtime.preDelay) {
+      const size = clamp(effect.parameters.size ?? 0.55, 0.05, 1);
+      const damping = clamp(effect.parameters.damping ?? 0.4, 0, 1);
+      runtime.preDelay.delayTime.setTargetAtTime(clamp(effect.parameters.preDelay ?? 0.02, 0, 0.25), context.currentTime, 0.01);
+      runtime.damping.frequency.setTargetAtTime(14_000 - damping * 12_500, context.currentTime, 0.02);
+      if (runtime.impulseSize === undefined || Math.abs(runtime.impulseSize - size) >= 0.01) {
+        const seconds = 0.35 + size * 3.2;
+        const impulse = context.createBuffer(2, Math.floor(context.sampleRate * seconds), context.sampleRate);
+        for (let channel = 0; channel < 2; channel += 1) {
+          const data = impulse.getChannelData(channel);
+          for (let i = 0; i < data.length; i += 1) {
+            const envelope = (1 - i / data.length) ** (1.4 + damping * 3.5);
+            data[i] = (Math.random() * 2 - 1) * envelope;
+          }
+        }
+        runtime.convolver.buffer = impulse;
+        runtime.impulseSize = size;
       }
-      convolver.buffer = impulse;
-      return convolver;
     }
-    return null;
+  }
+
+  private destroyEffectRuntime(runtime: EffectRuntime): void {
+    if (runtime.lfo) {
+      try { runtime.lfo.stop(); } catch { /* already stopped */ }
+    }
+    for (const node of runtime.nodes) node.disconnect();
+  }
+
+  private destroyTrackOutput(output: TrackOutput): void {
+    output.input.disconnect();
+    output.eq.forEach((node) => node.disconnect());
+    output.panner.disconnect();
+    output.gain.disconnect();
+    for (const runtime of output.effects.values()) this.destroyEffectRuntime(runtime);
   }
 
   private playVoice(track: Track, note: number, velocity: number, gate: number, project: StudioProject): void {
@@ -248,22 +408,25 @@ export class AudioEngine {
     source.stop(now + duration + 0.02);
   }
 
-  private async playClip(track: Track, clipId: string, dataUrl: string | undefined, sourceUrl: string | undefined, gainValue: number, project: StudioProject): Promise<void> {
-    if (!dataUrl && !sourceUrl) return;
+  private async playClip(track: Track, clip: AudioClip, project: StudioProject): Promise<void> {
+    if (!clip.dataUrl && !clip.sourceUrl) return;
     const context = await this.ensureContext();
-    let buffer = this.clipBuffers.get(clipId);
+    let buffer = this.clipBuffers.get(clip.id);
     if (!buffer) {
-      const bytes = dataUrl ? dataUrlBytes(dataUrl) : await (await fetch(sourceUrl!)).arrayBuffer();
+      const bytes = clip.dataUrl ? dataUrlBytes(clip.dataUrl) : await (await fetch(clip.sourceUrl!)).arrayBuffer();
       buffer = await context.decodeAudioData(bytes.slice(0));
-      this.clipBuffers.set(clipId, buffer);
+      this.clipBuffers.set(clip.id, buffer);
     }
+    const currentProject = this.project ?? project;
+    const currentTrack = currentProject.tracks.find((entry) => entry.id === track.id) ?? track;
     const source = context.createBufferSource();
     const gain = context.createGain();
-    gain.gain.value = gainValue;
+    gain.gain.value = clip.gain;
     source.buffer = buffer;
-    source.connect(gain).connect(this.makeTrackOutput(track, project));
+    source.connect(gain).connect(this.makeTrackOutput(currentTrack, currentProject));
     source.addEventListener("ended", () => this.sources.delete(source), { once: true });
     this.sources.add(source);
-    source.start();
+    const duration = Math.min(buffer.duration, clip.lengthSteps * 60 / currentProject.transport.tempo / currentProject.transport.stepsPerBeat);
+    source.start(context.currentTime, 0, Math.max(0.01, duration));
   }
 }

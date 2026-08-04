@@ -54,6 +54,19 @@ describe("studio runtime", () => {
     expect(runtime.renders.get(result.structuredContent?.renderId as string)?.buffer.length).toBe(buffer.length);
   });
 
+  it("adds, moves, trims, and removes playlist pattern clips", async () => {
+    const runtime = await createStudioRuntime();
+    const track = runtime.store.snapshot().tracks[0];
+    const added = await runtime.call("add_pattern_clip", { trackId: track.id, startStep: 4, lengthSteps: 8 });
+    const patternId = added.structuredContent?.patternId as string;
+
+    await runtime.call("update_pattern_clip", { trackId: track.id, patternId, startStep: 6, lengthSteps: 3 });
+    expect(runtime.store.snapshot().tracks[0].patterns.find((pattern) => pattern.id === patternId)).toMatchObject({ startStep: 6, lengthSteps: 3 });
+
+    await runtime.call("remove_pattern_clip", { trackId: track.id, patternId });
+    expect(runtime.store.snapshot().tracks[0].patterns.some((pattern) => pattern.id === patternId)).toBe(false);
+  });
+
   it("exports and imports the project without losing structure", async () => {
     const runtime = await createStudioRuntime();
     await runtime.call("set_project", { name: "Portable Session" });

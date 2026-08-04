@@ -74,6 +74,13 @@ export interface AudioClip {
   sourceUrl?: string;
 }
 
+export interface PatternClip {
+  id: string;
+  name: string;
+  startStep: number;
+  lengthSteps: number;
+}
+
 export interface Track {
   id: string;
   name: string;
@@ -81,6 +88,7 @@ export interface Track {
   type: TrackType;
   instrument: Instrument;
   steps: Step[];
+  patterns: PatternClip[];
   clips: AudioClip[];
   mixer: MixerSettings;
   eq: Equalizer;

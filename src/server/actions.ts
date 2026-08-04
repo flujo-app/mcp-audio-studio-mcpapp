@@ -234,6 +234,64 @@ export async function createStudioRuntime(dataPath?: string): Promise<StudioRunt
     }), "Updated sequencer notes."),
   });
 
+  define("add_pattern_clip", {
+    title: "Add pattern clip",
+    description: "Place a sequencer pattern section on an instrument track in the playlist.",
+    schema: z.object({
+      trackId: id,
+      name: z.string().min(1).max(160).optional(),
+      startStep: z.number().int().min(0),
+      lengthSteps: z.number().int().min(1).max(4096).optional(),
+    }),
+    handler: async (input) => {
+      const patternId = randomUUID();
+      const project = await store.mutate((project) => {
+        const track = trackById(project, input.trackId as string);
+        if (track.type !== "instrument") throw new Error("Pattern clips can only be added to instrument tracks");
+        track.patterns.push({
+          id: patternId,
+          name: (input.name as string | undefined) ?? `Pattern ${track.patterns.length + 1}`,
+          startStep: input.startStep as number,
+          lengthSteps: (input.lengthSteps as number | undefined) ?? Math.max(1, track.steps.length),
+        });
+        project.transport.loopEnd = Math.max(project.transport.loopEnd, (input.startStep as number) + ((input.lengthSteps as number | undefined) ?? Math.max(1, track.steps.length)));
+      });
+      return projectResult(project, "Added pattern clip.", { patternId });
+    },
+  });
+
+  define("update_pattern_clip", {
+    title: "Update pattern clip",
+    description: "Move, trim, or rename a sequencer pattern section in the playlist.",
+    schema: z.object({
+      trackId: id,
+      patternId: id,
+      name: z.string().min(1).max(160).optional(),
+      startStep: z.number().int().min(0).optional(),
+      lengthSteps: z.number().int().min(1).max(4096).optional(),
+    }),
+    handler: async (input) => projectResult(await store.mutate((project) => {
+      const pattern = trackById(project, input.trackId as string).patterns.find((entry) => entry.id === input.patternId);
+      if (!pattern) throw new Error(`Pattern clip not found: ${input.patternId}`);
+      if (input.name) pattern.name = input.name as string;
+      numberOr(pattern, "startStep", input.startStep, 0, 1_000_000);
+      numberOr(pattern, "lengthSteps", input.lengthSteps, 1, 1_000_000);
+    }), "Updated pattern clip."),
+  });
+
+  define("remove_pattern_clip", {
+    title: "Remove pattern clip",
+    description: "Remove a sequencer pattern section from the playlist.",
+    schema: z.object({ trackId: id, patternId: id }),
+    destructive: true,
+    handler: async ({ trackId, patternId }) => projectResult(await store.mutate((project) => {
+      const track = trackById(project, trackId as string);
+      const index = track.patterns.findIndex((pattern) => pattern.id === patternId);
+      if (index < 0) throw new Error(`Pattern clip not found: ${patternId}`);
+      track.patterns.splice(index, 1);
+    }), "Removed pattern clip."),
+  });
+
   define("add_audio_clip", {
     title: "Add audio clip",
     description: "Place an audio file on a track. Pass a data URL for bundled audio or a source URL for a remotely hosted file.",

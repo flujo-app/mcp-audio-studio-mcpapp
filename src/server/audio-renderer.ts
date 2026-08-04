@@ -102,30 +102,86 @@ function decodeWavDataUrl(clip: AudioClip): { left: Float32Array; right: Float32
 }
 
 function applyTrackEffects(signal: Float32Array, track: Track, sampleRate: number): void {
-  const filter = track.effects.find((effect) => effect.enabled && effect.type === "filter");
-  if (filter) {
-    const cutoff = Math.max(40, Math.min(sampleRate * 0.45, filter.parameters.cutoff ?? 8000));
-    const alpha = 1 - Math.exp((-TAU * cutoff) / sampleRate);
-    let previous = 0;
-    for (let i = 0; i < signal.length; i += 1) {
-      previous += alpha * (signal[i] - previous);
-      signal[i] = signal[i] * (1 - filter.mix) + previous * filter.mix;
+  const mixIntoSignal = (wet: Float32Array, mix: number): void => {
+    const amount = Math.max(0, Math.min(1, mix));
+    const dryGain = Math.cos(amount * Math.PI / 2);
+    const wetGain = Math.sin(amount * Math.PI / 2);
+    for (let i = 0; i < signal.length; i += 1) signal[i] = signal[i] * dryGain + wet[i] * wetGain;
+  };
+
+  for (const effect of track.effects.filter((entry) => entry.enabled)) {
+    const wet = new Float32Array(signal.length);
+    if (effect.type === "filter") {
+      const cutoff = Math.max(40, Math.min(sampleRate * 0.45, effect.parameters.cutoff ?? 8000));
+      const q = Math.max(0.1, Math.min(24, effect.parameters.resonance ?? 0.7));
+      const omega = TAU * cutoff / sampleRate;
+      const alpha = Math.sin(omega) / (2 * q);
+      const cosine = Math.cos(omega);
+      const a0 = 1 + alpha;
+      const b0 = ((1 - cosine) / 2) / a0;
+      const b1 = (1 - cosine) / a0;
+      const b2 = b0;
+      const a1 = (-2 * cosine) / a0;
+      const a2 = (1 - alpha) / a0;
+      let x1 = 0; let x2 = 0; let y1 = 0; let y2 = 0;
+      for (let i = 0; i < signal.length; i += 1) {
+        const value = b0 * signal[i] + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2;
+        wet[i] = value;
+        x2 = x1; x1 = signal[i]; y2 = y1; y1 = value;
+      }
+    } else if (effect.type === "distortion") {
+      const drive = Math.max(0.1, Math.min(20, effect.parameters.drive ?? 1.8));
+      for (let i = 0; i < signal.length; i += 1) wet[i] = Math.tanh(signal[i] * drive);
+    } else if (effect.type === "compressor" || effect.type === "limiter") {
+      const limiter = effect.type === "limiter";
+      const threshold = limiter ? Math.max(-24, Math.min(0, effect.parameters.ceiling ?? -0.8)) : Math.max(-60, Math.min(0, effect.parameters.threshold ?? -18));
+      const ratio = limiter ? 20 : Math.max(1, Math.min(20, effect.parameters.ratio ?? 4));
+      const attack = limiter ? 0.001 : Math.max(0.0001, Math.min(1, effect.parameters.attack ?? 0.01));
+      const release = Math.max(0.01, Math.min(1, effect.parameters.release ?? (limiter ? 0.08 : 0.25)));
+      const attackCoefficient = Math.exp(-1 / (attack * sampleRate));
+      const releaseCoefficient = Math.exp(-1 / (release * sampleRate));
+      let gain = 1;
+      for (let i = 0; i < signal.length; i += 1) {
+        const level = 20 * Math.log10(Math.max(1e-6, Math.abs(signal[i])));
+        const compressed = level > threshold ? threshold + (level - threshold) / ratio : level;
+        const desiredGain = 10 ** ((compressed - level) / 20);
+        const coefficient = desiredGain < gain ? attackCoefficient : releaseCoefficient;
+        gain = desiredGain + coefficient * (gain - desiredGain);
+        wet[i] = signal[i] * gain;
+      }
+    } else if (effect.type === "delay") {
+      const delay = Math.max(1, Math.floor(Math.max(0.01, Math.min(1.8, effect.parameters.time ?? 0.25)) * sampleRate));
+      const feedback = Math.max(0, Math.min(0.92, effect.parameters.feedback ?? 0.28));
+      for (let i = delay; i < signal.length; i += 1) wet[i] = signal[i - delay] + wet[i - delay] * feedback;
+    } else if (effect.type === "chorus") {
+      const rate = Math.max(0.05, Math.min(10, effect.parameters.rate ?? 0.8));
+      const depth = Math.max(0, Math.min(1, effect.parameters.depth ?? 0.25)) * 0.012;
+      for (let i = 0; i < signal.length; i += 1) {
+        const delay = (0.018 + Math.sin(TAU * rate * i / sampleRate) * depth) * sampleRate;
+        const source = i - delay;
+        const before = Math.floor(source);
+        if (before >= 0) {
+          const fraction = source - before;
+          wet[i] = signal[before] * (1 - fraction) + (signal[before + 1] ?? signal[before]) * fraction;
+        }
+      }
+    } else if (effect.type === "reverb") {
+      const size = Math.max(0.05, Math.min(1, effect.parameters.size ?? 0.55));
+      const damping = Math.max(0, Math.min(1, effect.parameters.damping ?? 0.4));
+      const preDelay = Math.floor(Math.max(0, Math.min(0.25, effect.parameters.preDelay ?? 0.02)) * sampleRate);
+      const delays = [0.0297, 0.0371, 0.0411, 0.0437].map((seconds) => Math.max(1, Math.floor(seconds * (0.65 + size * 0.9) * sampleRate)));
+      const feedback = 0.48 + size * 0.38;
+      let damped = 0;
+      for (let i = 0; i < signal.length; i += 1) {
+        let reflections = 0;
+        for (const delay of delays) if (i >= delay) reflections += wet[i - delay] / delays.length;
+        damped = reflections * (1 - damping * 0.82) + damped * damping * 0.82;
+        wet[i] = (i >= preDelay ? signal[i - preDelay] * 0.22 : 0) + damped * feedback;
+      }
+    } else {
+      wet.set(signal);
     }
-  }
-  for (const effect of track.effects.filter((entry) => entry.enabled && entry.type === "distortion")) {
-    const drive = effect.parameters.drive ?? 1.8;
-    for (let i = 0; i < signal.length; i += 1) {
-      const wet = Math.tanh(signal[i] * drive);
-      signal[i] = signal[i] * (1 - effect.mix) + wet * effect.mix;
-    }
-  }
-  for (const effect of track.effects.filter((entry) => entry.enabled && ["delay", "reverb", "chorus"].includes(entry.type))) {
-    const seconds = effect.type === "chorus" ? 0.018 : (effect.parameters.time ?? (effect.type === "reverb" ? 0.08 : 0.25));
-    const delay = Math.max(1, Math.floor(seconds * sampleRate));
-    const feedback = effect.parameters.feedback ?? (effect.type === "reverb" ? 0.42 : 0.28);
-    for (let i = delay; i < signal.length; i += 1) {
-      signal[i] += signal[i - delay] * feedback * effect.mix;
-    }
+    mixIntoSignal(wet, effect.mix);
   }
 }
 
@@ -182,7 +238,12 @@ export function renderProject(project: StudioProject, options: { sampleRate?: nu
     if (track.mixer.mute || (anySolo && !track.mixer.solo)) continue;
     const mono = new Float32Array(frameCount);
     for (let step = 0; step < requestedSteps; step += 1) {
-      const patternIndex = (step + project.transport.loopStart) % track.steps.length;
+      const absoluteStep = step + project.transport.loopStart;
+      const pattern = track.patterns?.find((entry) => absoluteStep >= entry.startStep && absoluteStep < entry.startStep + entry.lengthSteps);
+      if (track.type === "instrument" && !pattern) continue;
+      const patternIndex = pattern
+        ? (absoluteStep - pattern.startStep) % track.steps.length
+        : absoluteStep % track.steps.length;
       const item = track.steps[patternIndex];
       if (!item?.enabled || track.type === "audio") continue;
       const swingOffset = step % 2 === 1 ? project.transport.swing * secondsPerStep : 0;

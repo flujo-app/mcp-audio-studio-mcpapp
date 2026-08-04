@@ -55,6 +55,7 @@ export function makeTrack(input: {
     type: input.type ?? "instrument",
     instrument: defaultInstrument(input.name, input.kind ?? (input.type === "audio" ? "sampler" : "synth")),
     steps: Array.from({ length: 16 }, (_, index) => makeStep(enabled.has(index), note)),
+    patterns: input.type === "audio" ? [] : [{ id: randomUUID(), name: "Pattern 1", startStep: 0, lengthSteps: 16 }],
     clips: [],
     mixer: { ...DEFAULT_MIXER },
     eq: { low: 0, lowMid: 0, highMid: 0, high: 0 },
@@ -67,11 +68,11 @@ export function makeEffect(type: Effect["type"]): Effect {
   const defaults: Record<Effect["type"], Record<string, number>> = {
     filter: { cutoff: 8000, resonance: 0.7 },
     delay: { time: 0.25, feedback: 0.28 },
-    reverb: { size: 0.55, damping: 0.4 },
+    reverb: { size: 0.55, damping: 0.4, preDelay: 0.02 },
     distortion: { drive: 1.8 },
-    compressor: { threshold: -18, ratio: 4 },
+    compressor: { threshold: -18, ratio: 4, attack: 0.01, release: 0.25 },
     chorus: { rate: 0.8, depth: 0.25 },
-    limiter: { ceiling: -0.8 },
+    limiter: { ceiling: -0.8, release: 0.08 },
   };
   return {
     id: randomUUID(),
@@ -127,12 +128,23 @@ function isProject(value: unknown): value is StudioProject {
   return project.schemaVersion === 1 && typeof project.name === "string" && Array.isArray(project.tracks);
 }
 
+function normalizeProject(project: StudioProject): StudioProject {
+  for (const track of project.tracks) {
+    if (!Array.isArray(track.patterns)) {
+      track.patterns = track.type === "instrument"
+        ? [{ id: randomUUID(), name: "Pattern 1", startStep: project.transport.loopStart, lengthSteps: Math.max(1, track.steps.length) }]
+        : [];
+    }
+  }
+  return project;
+}
+
 export class ProjectStore {
   private project: StudioProject;
   private writeQueue: Promise<void> = Promise.resolve();
 
   private constructor(project: StudioProject, private readonly dataPath?: string) {
-    this.project = project;
+    this.project = normalizeProject(project);
   }
 
   static async open(dataPath?: string): Promise<ProjectStore> {
@@ -156,7 +168,7 @@ export class ProjectStore {
   async replace(next: StudioProject): Promise<StudioProject> {
     if (!isProject(next)) throw new Error("Unsupported project document");
     const now = new Date().toISOString();
-    this.project = structuredClone({ ...next, revision: this.project.revision + 1, updatedAt: now });
+    this.project = normalizeProject(structuredClone({ ...next, revision: this.project.revision + 1, updatedAt: now }));
     await this.persist();
     return this.snapshot();
   }
