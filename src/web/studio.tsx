@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { createRoot } from "react-dom/client";
 import type { AutomationLane, EffectType, StudioProject, Track } from "../shared/types.js";
 import { AudioEngine } from "./audio-engine.js";
-import { callTool, onHostResult, updateModelContext, type StudioToolResult } from "./bridge.js";
+import { callTool, downloadBase64File, downloadTextFile, onHostResult, updateModelContext, type StudioToolResult } from "./bridge.js";
 import "./studio.css";
 
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
@@ -25,27 +25,17 @@ function projectFromResult(result: StudioToolResult): StudioProject | undefined 
   return result.structuredContent?.project as StudioProject | undefined;
 }
 
-function downloadBase64(data: string, mimeType: string, name: string): void {
-  const binary = atob(data);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
-  const url = URL.createObjectURL(new Blob([bytes], { type: mimeType }));
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = name;
-  anchor.click();
-  window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
 function Knob({ value, min, max, label, onLocal, onCommit }: {
   value: number; min: number; max: number; label: string;
-  onLocal: (value: number) => void; onCommit: () => void;
+  onLocal: (value: number) => void; onCommit: (value: number) => void;
 }): React.ReactElement {
   const degrees = -135 + ((value - min) / (max - min)) * 270;
   return <label className="knob-wrap" title={`${label}: ${value.toFixed(2)}`}>
     <span className="knob" style={{ "--knob-angle": `${degrees}deg` } as React.CSSProperties} />
     <input aria-label={label} type="range" min={min} max={max} step={(max - min) / 100} value={value}
-      onChange={(event) => onLocal(Number(event.target.value))} onPointerUp={onCommit} onKeyUp={onCommit} />
+      onChange={(event) => onLocal(Number(event.target.value))}
+      onPointerUp={(event) => onCommit(Number(event.currentTarget.value))}
+      onKeyUp={(event) => onCommit(Number(event.currentTarget.value))} />
     <small>{label}</small>
   </label>;
 }
@@ -136,6 +126,10 @@ function Studio(): React.ReactElement {
   }, []);
 
   useEffect(() => {
+    if (project) engineRef.current?.updateProject(project);
+  }, [project]);
+
+  useEffect(() => {
     if (selected) void updateModelContext(`Audio Studio selection: track "${selected.name}" (${selected.id}), view ${view}. Project revision ${project?.revision}.`);
   }, [selectedId, view, project?.revision]);
 
@@ -169,19 +163,27 @@ function Studio(): React.ReactElement {
   const renderAudio = async (): Promise<void> => {
     const result = await run("render_audio", { name: project?.name ?? "audio-studio-render", sampleRate: 44100 });
     const audio = result?.content?.find((item) => item.type === "audio" && item.data);
-    if (audio?.data) downloadBase64(audio.data, audio.mimeType ?? "audio/wav", `${project?.name ?? "audio-studio-render"}.wav`);
+    if (!audio?.data) return;
+    const name = `${project?.name ?? "audio-studio-render"}.wav`;
+    try {
+      const downloaded = await downloadBase64File(name, audio.mimeType ?? "audio/wav", audio.data);
+      setStatus(downloaded ? `Downloaded · ${name}` : "Download cancelled");
+    } catch (error) {
+      setStatus(`Download error · ${error instanceof Error ? error.message : String(error)}`);
+    }
   };
 
   const exportProject = async (): Promise<void> => {
     const result = await run("export_project", { pretty: true });
     const json = result?.structuredContent?.json as string | undefined;
     if (!json) return;
-    const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
-    const anchor = document.createElement("a");
-    anchor.href = url;
-    anchor.download = `${project?.name.replace(/[^a-z0-9]+/gi, "-").toLowerCase() ?? "project"}.audio-studio.json`;
-    anchor.click();
-    URL.revokeObjectURL(url);
+    const name = `${project?.name.replace(/[^a-z0-9]+/gi, "-").toLowerCase() ?? "project"}.audio-studio.json`;
+    try {
+      const downloaded = await downloadTextFile(name, "application/json", json);
+      setStatus(downloaded ? `Exported · ${name}` : "Export cancelled");
+    } catch (error) {
+      setStatus(`Export error · ${error instanceof Error ? error.message : String(error)}`);
+    }
   };
 
   const addFile = async (file: File): Promise<void> => {
@@ -239,12 +241,9 @@ function Studio(): React.ReactElement {
     await run("set_steps", { trackId: track.id, updates: [{ index, enabled, ...(note === undefined ? {} : { note }) }] });
   };
 
-  const commitMixer = async (track: Track): Promise<void> => {
-    await run("set_mixer", { target: track.id, volume: track.mixer.volume, pan: track.mixer.pan, mute: track.mixer.mute, solo: track.mixer.solo });
-  };
-
   const saveAutomation = async (lane: AutomationLane): Promise<void> => {
-    await run("upsert_automation", { ...lane });
+    const { id: laneId, ...changes } = lane;
+    await run("upsert_automation", { laneId, ...changes });
   };
 
   const addAutomation = async (): Promise<void> => {
@@ -301,8 +300,8 @@ function Studio(): React.ReactElement {
           <div className="timeline-ruler"><span/><div>{steps.map((step) => <i key={step} className={step % 4 === 0 ? "beat" : ""}>{step % 4 === 0 ? step / 4 + 1 : "·"}</i>)}</div></div>
           {project.tracks.map((track) => <div key={track.id} className={selected?.id === track.id ? "channel-row selected" : "channel-row"} onClick={() => setSelectedId(track.id)}>
             <button className="track-led" style={{ background: track.color }} aria-label={`Select ${track.name}`}/><div className="channel-name"><strong>{track.name}</strong><small>{track.instrument.kind} · {track.instrument.preset}</small></div>
-            <Knob label="VOL" min={0} max={1.5} value={track.mixer.volume} onLocal={(value) => localTrack(track.id, (draft) => { draft.mixer.volume = value; })} onCommit={() => void commitMixer(track)} />
-            <Knob label="PAN" min={-1} max={1} value={track.mixer.pan} onLocal={(value) => localTrack(track.id, (draft) => { draft.mixer.pan = value; })} onCommit={() => void commitMixer(track)} />
+            <Knob label="VOL" min={0} max={1.5} value={track.mixer.volume} onLocal={(value) => localTrack(track.id, (draft) => { draft.mixer.volume = value; })} onCommit={(volume) => void run("set_mixer", { target: track.id, volume })} />
+            <Knob label="PAN" min={-1} max={1} value={track.mixer.pan} onLocal={(value) => localTrack(track.id, (draft) => { draft.mixer.pan = value; })} onCommit={(pan) => void run("set_mixer", { target: track.id, pan })} />
             <div className="steps">{steps.slice(0, track.steps.length).map((index) => <button key={index} aria-label={`${track.name} step ${index + 1}`} className={`${track.steps[index]?.enabled ? "on" : ""} ${playhead === index ? "playing" : ""} ${index % 4 === 0 ? "beat" : ""}`} style={track.steps[index]?.enabled ? { background: track.color } : undefined} onClick={(event) => { event.stopPropagation(); void setStep(track, index); }}><span/></button>)}</div>
             <div className="channel-actions"><button className={track.mixer.mute ? "active" : ""} onClick={(event) => { event.stopPropagation(); void run("set_mixer", { target: track.id, mute: !track.mixer.mute }); }}>M</button><button className={track.mixer.solo ? "active" : ""} onClick={(event) => { event.stopPropagation(); void run("set_mixer", { target: track.id, solo: !track.mixer.solo }); }}>S</button></div>
           </div>)}
@@ -338,7 +337,7 @@ function Studio(): React.ReactElement {
 
     <footer className="mixer-console">
       <div className="mixer-title"><strong>MIXER</strong><small>{project.tracks.length + 1} channels</small></div>
-      <div className="mixer-scroll">{project.tracks.map((track, index) => <div className={selected?.id === track.id ? "mixer-strip selected" : "mixer-strip"} key={track.id} onClick={() => setSelectedId(track.id)}><div className="strip-number">{String(index + 1).padStart(2, "0")}</div><div className="strip-meter"><i style={{ height: `${Math.min(95, track.mixer.volume * 70 + (engineRef.current?.playing ? Math.random()*15 : 0))}%`, background: track.color }}/></div><input className="fader" aria-label={`${track.name} volume`} type="range" min="0" max="1.5" step=".01" value={track.mixer.volume} onChange={(event) => localTrack(track.id, (draft) => { draft.mixer.volume = Number(event.target.value); })} onPointerUp={() => void commitMixer(track)}/><div className="strip-buttons"><button className={track.mixer.mute ? "active" : ""} onClick={() => void run("set_mixer", { target: track.id, mute: !track.mixer.mute })}>M</button><button className={track.mixer.solo ? "active" : ""} onClick={() => void run("set_mixer", { target: track.id, solo: !track.mixer.solo })}>S</button></div><b title={track.name}>{track.name}</b></div>)}<div className="mixer-strip master"><div className="strip-number">M</div><div className="strip-meter stereo"><i style={{ height: `${meter*100}%` }}/><i style={{ height: `${meter*92}%` }}/></div><input className="fader" type="range" min="0" max="1.5" step=".01" value={project.master.volume} onChange={(event) => setProject({ ...project, master: { ...project.master, volume: Number(event.target.value) } })} onPointerUp={() => void run("set_mixer", { target: "master", volume: project.master.volume })}/><div className="strip-buttons"><button className={project.master.mute ? "active" : ""} onClick={() => void run("set_mixer", { target: "master", mute: !project.master.mute })}>M</button></div><b>MASTER</b></div></div>
+      <div className="mixer-scroll">{project.tracks.map((track, index) => <div className={selected?.id === track.id ? "mixer-strip selected" : "mixer-strip"} key={track.id} onClick={() => setSelectedId(track.id)}><div className="strip-number">{String(index + 1).padStart(2, "0")}</div><div className="strip-meter"><i style={{ height: `${Math.min(95, track.mixer.volume * 70 + (engineRef.current?.playing ? Math.random()*15 : 0))}%`, background: track.color }}/></div><input className="fader" aria-label={`${track.name} volume`} type="range" min="0" max="1.5" step=".01" value={track.mixer.volume} onChange={(event) => localTrack(track.id, (draft) => { draft.mixer.volume = Number(event.target.value); })} onPointerUp={(event) => void run("set_mixer", { target: track.id, volume: Number(event.currentTarget.value) })} onKeyUp={(event) => void run("set_mixer", { target: track.id, volume: Number(event.currentTarget.value) })}/><div className="strip-buttons"><button className={track.mixer.mute ? "active" : ""} onClick={() => void run("set_mixer", { target: track.id, mute: !track.mixer.mute })}>M</button><button className={track.mixer.solo ? "active" : ""} onClick={() => void run("set_mixer", { target: track.id, solo: !track.mixer.solo })}>S</button></div><b title={track.name}>{track.name}</b></div>)}<div className="mixer-strip master"><div className="strip-number">M</div><div className="strip-meter stereo"><i style={{ height: `${meter*100}%` }}/><i style={{ height: `${meter*92}%` }}/></div><input className="fader" type="range" min="0" max="1.5" step=".01" value={project.master.volume} onChange={(event) => setProject({ ...project, master: { ...project.master, volume: Number(event.target.value) } })} onPointerUp={(event) => void run("set_mixer", { target: "master", volume: Number(event.currentTarget.value) })} onKeyUp={(event) => void run("set_mixer", { target: "master", volume: Number(event.currentTarget.value) })}/><div className="strip-buttons"><button className={project.master.mute ? "active" : ""} onClick={() => void run("set_mixer", { target: "master", mute: !project.master.mute })}>M</button></div><b>MASTER</b></div></div>
     </footer>
   </div>;
 }

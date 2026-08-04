@@ -2,6 +2,13 @@ import type { Effect, StudioProject, Track } from "../shared/types.js";
 
 type ActiveSource = AudioScheduledSourceNode;
 
+interface TrackOutput {
+  input: GainNode;
+  gain: GainNode;
+  panner: StereoPannerNode;
+  nodes: AudioNode[];
+}
+
 function midiFrequency(note: number): number {
   return 440 * 2 ** ((note - 69) / 12);
 }
@@ -22,7 +29,9 @@ export class AudioEngine {
   private currentStep = 0;
   private sources = new Set<ActiveSource>();
   private clipBuffers = new Map<string, AudioBuffer>();
+  private trackOutputs = new Map<string, TrackOutput>();
   private meterData = new Uint8Array(128);
+  private project?: StudioProject;
 
   constructor(private readonly onStep: (step: number) => void) {}
 
@@ -45,16 +54,42 @@ export class AudioEngine {
   async start(project: StudioProject, fromStep = project.transport.loopStart): Promise<void> {
     this.stop();
     await this.ensureContext();
+    this.updateProject(project);
     this.currentStep = Math.max(project.transport.loopStart, Math.min(project.transport.loopEnd - 1, fromStep));
     const tick = (): void => {
-      this.scheduleStep(project, this.currentStep);
+      const current = this.project;
+      if (!current) return;
+      if (this.currentStep < current.transport.loopStart || this.currentStep >= current.transport.loopEnd) {
+        this.currentStep = current.transport.loopStart;
+      }
+      this.scheduleStep(current, this.currentStep);
       this.onStep(this.currentStep);
       this.currentStep += 1;
-      if (this.currentStep >= project.transport.loopEnd) this.currentStep = project.transport.loopStart;
+      if (this.currentStep >= current.transport.loopEnd) this.currentStep = current.transport.loopStart;
     };
     tick();
     const stepMs = 60_000 / project.transport.tempo / project.transport.stepsPerBeat;
     this.timer = window.setInterval(tick, stepMs);
+  }
+
+  updateProject(project: StudioProject): void {
+    this.project = project;
+    const context = this.context;
+    if (!context) return;
+
+    this.master?.gain.setTargetAtTime(project.master.mute ? 0 : project.master.volume, context.currentTime, 0.01);
+    const anySolo = project.tracks.some((track) => track.mixer.solo);
+    for (const [trackId, output] of this.trackOutputs) {
+      const track = project.tracks.find((entry) => entry.id === trackId);
+      if (!track) {
+        for (const node of output.nodes) node.disconnect();
+        this.trackOutputs.delete(trackId);
+        continue;
+      }
+      output.panner.pan.setTargetAtTime(track.mixer.pan, context.currentTime, 0.01);
+      const volume = track.mixer.mute || (anySolo && !track.mixer.solo) ? 0 : track.mixer.volume;
+      output.gain.gain.setTargetAtTime(volume, context.currentTime, 0.01);
+    }
   }
 
   stop(): void {
@@ -64,6 +99,10 @@ export class AudioEngine {
       try { source.stop(); } catch { /* already stopped */ }
     }
     this.sources.clear();
+    for (const output of this.trackOutputs.values()) {
+      for (const node of output.nodes) node.disconnect();
+    }
+    this.trackOutputs.clear();
   }
 
   meter(): number {
@@ -94,10 +133,15 @@ export class AudioEngine {
   }
 
   private makeTrackOutput(track: Track, project: StudioProject): AudioNode {
+    const existing = this.trackOutputs.get(track.id);
+    if (existing) return existing.input;
+
     const context = this.context!;
-    let head: AudioNode = context.createGain();
+    const input = context.createGain();
+    const nodes: AudioNode[] = [input];
+    const head: AudioNode = input;
     let tail = head;
-    const add = (node: AudioNode): void => { tail.connect(node); tail = node; };
+    const add = (node: AudioNode): void => { tail.connect(node); tail = node; nodes.push(node); };
 
     const eqFrequencies = [100, 500, 2500, 9000];
     const eqValues = [track.eq.low, track.eq.lowMid, track.eq.highMid, track.eq.high];
@@ -117,10 +161,14 @@ export class AudioEngine {
     panner.pan.value = track.mixer.pan;
     add(panner);
     const gain = context.createGain();
-    gain.gain.value = track.mixer.volume;
     add(gain);
     tail.connect(this.master!);
-    return head;
+    const output = { input, gain, panner, nodes };
+    this.trackOutputs.set(track.id, output);
+    const anySolo = project.tracks.some((entry) => entry.mixer.solo);
+    panner.pan.value = track.mixer.pan;
+    gain.gain.value = track.mixer.mute || (anySolo && !track.mixer.solo) ? 0 : track.mixer.volume;
+    return input;
   }
 
   private effectNode(effect: Effect): AudioNode | null {

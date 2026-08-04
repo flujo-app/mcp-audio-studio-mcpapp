@@ -19,5 +19,5 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run check
-      - run: node dist/server.js --version
+      - run: node ./dist/index.js --version
       - run: npm pack --dry-run

@@ -43,8 +43,8 @@ Node.js 18+ is needed only when using the npm/package-source route:
 ```bash
 npm install
 npm run build
-node dist/server.js --stdio
-node dist/server.js --http --port 3100
+node ./dist/index.js --stdio
+node ./dist/index.js --http --port 3100
 ```
 
 The HTTP studio opens at `http://127.0.0.1:3100/`; the MCP endpoint is `http://127.0.0.1:3100/mcp`.
@@ -58,7 +58,7 @@ For a checked-out repository:
   "mcpServers": {
     "audio-studio": {
       "command": "node",
-      "args": ["/absolute/path/to/mcp-audio-studio/dist/server.js", "--stdio"]
+      "args": ["./dist/index.js", "--stdio"]
     }
   }
 }
@@ -110,12 +110,28 @@ npm run build
 npm run serve
 ```
 
-`npm run build` produces a single `dist/server.js` with the entire minified React MCP App embedded as a string. Tests use the official MCP SDK’s linked in-memory transport to verify tool and UI resource discovery.
+`npm run build` produces a single `./dist/index.js` with the entire minified React MCP App embedded as a string. Tests use the official MCP SDK’s linked in-memory transport to verify tool and UI resource discovery.
+
+### Publishing to npm
+
+To publish the current version:
+
+```bash
+npm run release
+```
+
+The release command signs in through npm when necessary, runs the complete
+check suite, publishes the package publicly, and confirms that npm serves the
+version. It is safe to rerun: if that exact version is already published, it
+verifies the project and skips the duplicate publish.
+
+Run `npm run release:check` to validate the release helper without publishing.
 
 ## Security
 
 - The web server disables identifying headers and uses a 64 MB JSON limit for embedded audio.
 - MCP App permissions request microphone and clipboard-write; hosts may deny either capability.
+- The app declares inline, fullscreen, and picture-in-picture (`pip`) display-mode support; the host chooses which declared modes are available.
 - Remote WAM and audio URLs are represented in project state but are not allowed by the embedded MCP App CSP in this release.
 - VST3 paths are metadata only and are never executed.
 

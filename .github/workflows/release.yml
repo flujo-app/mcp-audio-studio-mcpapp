@@ -31,7 +31,7 @@ jobs:
           bun-version: latest
       - run: npm ci
       - run: npm run check
-      - run: bun build ./dist/server.js --compile --outfile ${{ matrix.artifact }}
+      - run: bun build ./dist/index.js --compile --outfile ${{ matrix.artifact }}
       - run: test "$(./${{ matrix.artifact }} --version)" = "mcp-audio-studio 0.1.0"
         if: runner.os != 'Windows'
       - run: |

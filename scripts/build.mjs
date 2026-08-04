@@ -53,7 +53,7 @@ const studioHtmlPlugin = {
 const serverOptions = {
   absWorkingDir: root,
   entryPoints: ["src/server/index.ts"],
-  outfile: "dist/server.js",
+  outfile: "dist/index.js",
   bundle: true,
   platform: "node",
   format: "esm",
@@ -74,5 +74,5 @@ if (watch) {
   console.log("Watching server and studio UI sources…");
 } else {
   await build(serverOptions);
-  console.log(`Built MCP server (${(await readFile(path.join(distDirectory, "server.js"))).length.toLocaleString()} bytes) with inline studio UI (${latestHtml.length.toLocaleString()} bytes).`);
+  console.log(`Built MCP server (${(await readFile(path.join(distDirectory, "index.js"))).length.toLocaleString()} bytes) with inline studio UI (${latestHtml.length.toLocaleString()} bytes).`);
 }
