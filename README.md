@@ -22,6 +22,20 @@ The model and the person use the same authoritative project. Every UI action cal
 
 ## Run it
 
+### npm via npx (recommended)
+
+The package is published on [npm](https://www.npmjs.com/package/mcp-audio-studio). With Node.js 18 or newer, run it without installing or cloning the repository:
+
+```bash
+# MCP stdio
+npx -y mcp-audio-studio@latest --stdio
+
+# HTTP MCP endpoint + standalone studio
+npx -y mcp-audio-studio@latest --http --port 3100
+```
+
+The HTTP studio opens at `http://127.0.0.1:3100/`; the MCP endpoint is `http://127.0.0.1:3100/mcp`.
+
 ### One standalone executable
 
 Download the executable for Windows, macOS, or Linux from [GitHub Releases](https://github.com/flujo-app/mcp-audio-studio-mcpapp/releases). It contains the server, MCP App, runtime, and JavaScript dependencies.
@@ -36,9 +50,9 @@ Download the executable for Windows, macOS, or Linux from [GitHub Releases](http
 
 Without configured certificates, HTTPS mode creates an ephemeral self-signed localhost certificate. For a trusted certificate, set `MCP_AUDIO_STUDIO_TLS_CERT` and `MCP_AUDIO_STUDIO_TLS_KEY`.
 
-### Node package
+### From source
 
-Node.js 18+ is needed only when using the npm/package-source route:
+For local development from a checked-out repository:
 
 ```bash
 npm install
@@ -47,11 +61,22 @@ node ./dist/index.js --stdio
 node ./dist/index.js --http --port 3100
 ```
 
-The HTTP studio opens at `http://127.0.0.1:3100/`; the MCP endpoint is `http://127.0.0.1:3100/mcp`.
-
 ### MCP client configuration
 
-For a checked-out repository:
+Use the npm package in an MCP client without a separate installation:
+
+```json
+{
+  "mcpServers": {
+    "audio-studio": {
+      "command": "npx",
+      "args": ["-y", "mcp-audio-studio@latest", "--stdio"]
+    }
+  }
+}
+```
+
+For a checked-out repository instead:
 
 ```json
 {
