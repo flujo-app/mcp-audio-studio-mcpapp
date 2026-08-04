@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import type { AudioClip, AutomationLane, Effect, EffectType, StudioProject, Track } from "../shared/types.js";
 import { AudioEngine } from "./audio-engine.js";
 import { callTool, downloadBase64File, downloadTextFile, onHostResult, updateModelContext, type StudioToolResult } from "./bridge.js";
+import { normalizeAudioFileToWav } from "./wav.js";
 import "./studio.css";
 
 const NOTE_NAMES = ["C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"];
@@ -322,9 +323,17 @@ function Studio(): React.ReactElement {
 
   const addFile = async (file: File, targetId?: string): Promise<void> => {
     if (!project) return;
+    let portableFile: File;
+    try {
+      if (file.type.toLowerCase() !== "audio/wav" && !/\.wav$/i.test(file.name)) setStatus(`Converting ${file.name} to WAV…`);
+      portableFile = await normalizeAudioFileToWav(file);
+    } catch (error) {
+      setStatus(`Audio conversion failed · ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
     let target = project.tracks.find((track) => track.id === targetId) ?? selected;
     if (!target || target.type !== "audio") {
-      const result = await run("add_track", { name: file.name.replace(/\.[^.]+$/, ""), type: "audio", instrumentKind: "sampler", color: "#b983ff" });
+      const result = await run("add_track", { name: portableFile.name.replace(/\.[^.]+$/, ""), type: "audio", instrumentKind: "sampler", color: "#b983ff" });
       const next = projectFromResult(result!);
       target = next?.tracks.find((track) => track.id === result?.structuredContent?.trackId);
       if (target) setSelectedId(target.id);
@@ -334,9 +343,9 @@ function Studio(): React.ReactElement {
       const reader = new FileReader();
       reader.onload = () => resolve(reader.result as string);
       reader.onerror = () => reject(reader.error);
-      reader.readAsDataURL(file);
+      reader.readAsDataURL(portableFile);
     });
-    await run("add_audio_clip", { trackId: target.id, name: file.name, startStep: 0, lengthSteps: project.transport.loopEnd, gain: 1, mimeType: file.type || "audio/wav", dataUrl });
+    await run("add_audio_clip", { trackId: target.id, name: portableFile.name, startStep: 0, lengthSteps: project.transport.loopEnd, gain: 1, mimeType: "audio/wav", dataUrl });
   };
 
   const requestAudioForTrack = (trackId?: string): void => {

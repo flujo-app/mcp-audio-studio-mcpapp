@@ -13,7 +13,7 @@ The model and the person use the same authoritative project. Every UI action cal
 - Audio file import, clip placement, gain/trim metadata, and browser playback.
 - Per-channel and master volume, pan, mute, solo, sends, and animated meters.
 - Four-band equalizer and filter, delay, reverb, distortion, compressor, chorus, and limiter slots.
-- Automation lanes with linear, hold, and smooth control points.
+- Playback and render automation for master/track mixing, EQ, sends, built-in effects, instrument parameters, and numeric plugin parameters, with linear, hold, and smooth control points.
 - Built-in DSP slots, browser-safe Web Audio Module (WAM) slots, and VST3 control/state slots.
 - Pure-JavaScript stereo WAV rendering, returned as playable MCP audio content.
 - Project persistence, import, and export.
@@ -96,7 +96,7 @@ The bundled Web Audio and offline render engines process built-in instruments/ef
 
 ## Persistence and audio files
 
-Pass `--data ./studio-project.json` or set `MCP_AUDIO_STUDIO_DATA` to persist every revision. Imported audio is stored as a data URL inside the project. The browser can decode formats supported by the host; offline server rendering currently mixes PCM/float WAV clips and always emits 16-bit stereo WAV.
+Pass `--data ./studio-project.json` or set `MCP_AUDIO_STUDIO_DATA` to persist every revision. Imported audio is stored as a data URL inside the project. Browser imports and microphone recordings are normalized to PCM WAV so browser playback and offline rendering use the same asset; direct MCP imports should provide PCM/float WAV data. Offline rendering always emits 16-bit stereo WAV.
 
 Recent renders are kept in memory (up to eight) and are accessible with `get_render` or, in web mode, `GET /renders/:id`.
 

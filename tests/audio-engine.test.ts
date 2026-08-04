@@ -37,6 +37,9 @@ class FakeStereoPannerNode extends FakeAudioNode {
   pan = new FakeAudioParam();
 }
 
+class FakeChannelSplitterNode extends FakeAudioNode {}
+class FakeChannelMergerNode extends FakeAudioNode {}
+
 class FakeDelayNode extends FakeAudioNode {
   delayTime = new FakeAudioParam();
 }
@@ -76,6 +79,8 @@ class FakeAudioContext {
   createAnalyser(): AnalyserNode { return new FakeAnalyserNode() as unknown as AnalyserNode; }
   createBiquadFilter(): BiquadFilterNode { return new FakeBiquadFilterNode() as unknown as BiquadFilterNode; }
   createStereoPanner(): StereoPannerNode { return new FakeStereoPannerNode() as unknown as StereoPannerNode; }
+  createChannelSplitter(): ChannelSplitterNode { return new FakeChannelSplitterNode() as unknown as ChannelSplitterNode; }
+  createChannelMerger(): ChannelMergerNode { return new FakeChannelMergerNode() as unknown as ChannelMergerNode; }
   createDelay(): DelayNode { return new FakeDelayNode() as unknown as DelayNode; }
   createWaveShaper(): WaveShaperNode { return new FakeWaveShaperNode() as unknown as WaveShaperNode; }
   createDynamicsCompressor(): DynamicsCompressorNode { return new FakeDynamicsCompressorNode() as unknown as DynamicsCompressorNode; }
@@ -194,6 +199,37 @@ describe("AudioEngine", () => {
     engine.updateProject(next);
     expect(clearInterval).toHaveBeenCalledWith(1);
     expect(setInterval).toHaveBeenLastCalledWith(expect.any(Function), 60_000 / 96 / 4);
+    engine.stop();
+  });
+
+  it("applies automated mixer, effect, and built-in plugin values while playing", async () => {
+    vi.stubGlobal("AudioContext", FakeAudioContext);
+    vi.stubGlobal("window", { setInterval: vi.fn(() => 1), clearInterval: vi.fn() });
+
+    const project = createDefaultProject();
+    project.tracks = [project.tracks[0]];
+    const track = project.tracks[0];
+    const effect = makeEffect("filter");
+    track.effects = [effect];
+    track.plugins = [{ id: "enhancer", format: "builtin", name: "Stereo Enhancer", vendor: "Audio Studio", enabled: true, parameters: { width: 1 } }];
+    project.automation = [
+      { id: "volume", name: "Volume", target: `track:${track.id}.volume`, color: "#ffffff", min: 0, max: 1, enabled: true, points: [{ step: 0, value: 0.2, curve: "linear" }] },
+      { id: "cutoff", name: "Cutoff", target: `track:${track.id}.effect:${effect.id}.cutoff`, color: "#ffffff", min: 40, max: 20_000, enabled: true, points: [{ step: 0, value: 640, curve: "linear" }] },
+      { id: "width", name: "Width", target: `track:${track.id}.plugin:enhancer.width`, color: "#ffffff", min: 0, max: 2, enabled: true, points: [{ step: 0, value: 0, curve: "linear" }] },
+    ];
+
+    const engine = new AudioEngine(() => {});
+    await engine.start(project);
+    const exposed = engine as unknown as { trackOutputs: Map<string, {
+      gain: FakeGainNode;
+      effects: Map<string, { filter: FakeBiquadFilterNode }>;
+      width: { directLeft: FakeGainNode; crossLeft: FakeGainNode };
+    }> };
+    const output = exposed.trackOutputs.get(track.id)!;
+    expect(output.gain.gain.value).toBe(0.2);
+    expect(output.effects.get(effect.id)?.filter.frequency.value).toBe(640);
+    expect(output.width.directLeft.gain.value).toBe(0.5);
+    expect(output.width.crossLeft.gain.value).toBe(0.5);
     engine.stop();
   });
 });

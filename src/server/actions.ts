@@ -516,11 +516,11 @@ export async function createStudioRuntime(dataPath?: string): Promise<StudioRunt
 
   define("upsert_automation", {
     title: "Set automation lane",
-    description: "Create or update an automation lane for master/track volume, pan, effect, plugin, or instrument parameters.",
+    description: "Create or update an automation lane. Targets include master.volume, master.pan, track:<id>.volume/pan/sendA/sendB, track:<id>.eq.<band>, track:<id>.instrument.<parameter>, track:<id>.effect:<effectId>.mix/<parameter>, and track:<id>.plugin:<pluginId>.<parameter>. Built-in plugin parameters affect DSP; WAM/VST3 values are retained for an external host.",
     schema: z.object({
       laneId: z.string().optional(),
       name: z.string().min(1).max(120),
-      target: z.string().min(1).describe("Examples: master.volume, track:<id>.volume, track:<id>.pan, track:<id>.effect:<id>.mix"),
+      target: z.string().min(1).describe("Examples: master.volume, track:<id>.volume, track:<id>.instrument.cutoff, track:<id>.effect:<id>.mix, track:<id>.plugin:<id>.width"),
       color: z.string().regex(/^#[0-9a-fA-F]{6}$/).default("#ff9f43"),
       min: finite.default(0),
       max: finite.default(1),
