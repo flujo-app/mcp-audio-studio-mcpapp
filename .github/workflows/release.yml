@@ -1,0 +1,56 @@
+name: Release standalone binaries
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  compile:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            artifact: mcp-audio-studio-linux-x64
+          - os: windows-latest
+            artifact: mcp-audio-studio-windows-x64.exe
+          - os: macos-14
+            artifact: mcp-audio-studio-macos-arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      - run: npm ci
+      - run: npm run check
+      - run: bun build ./dist/server.js --compile --outfile ${{ matrix.artifact }}
+      - run: ./${{ matrix.artifact }} --version
+        if: runner.os != 'Windows'
+      - run: ./${{ matrix.artifact }} --version
+        if: runner.os == 'Windows'
+        shell: pwsh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+
+  release:
+    needs: compile
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: release/*

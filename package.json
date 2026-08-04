@@ -1,0 +1,70 @@
+{
+  "name": "mcp-audio-studio",
+  "version": "0.1.0",
+  "description": "An MCP Apps digital audio workstation with sequencing, mixing, effects, automation, plugins, and WAV rendering.",
+  "type": "module",
+  "bin": {
+    "mcp-audio-studio": "dist/server.js"
+  },
+  "main": "dist/server.js",
+  "exports": "./dist/server.js",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "node scripts/build.mjs --watch",
+    "start": "node dist/server.js --stdio",
+    "serve": "node dist/server.js --http",
+    "serve:https": "node dist/server.js --https",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "check": "npm run typecheck && npm run test && npm run build",
+    "prepack": "npm run check"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-app",
+    "audio",
+    "daw",
+    "sequencer",
+    "music",
+    "model-context-protocol"
+  ],
+  "license": "MIT",
+  "author": "FLUJO",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/flujo-app/mcp-audio-studio-mcpapp.git"
+  },
+  "bugs": {
+    "url": "https://github.com/flujo-app/mcp-audio-studio-mcpapp/issues"
+  },
+  "homepage": "https://github.com/flujo-app/mcp-audio-studio-mcpapp#readme",
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/ext-apps": "^1.1.2",
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "cors": "^2.8.5",
+    "express": "^5.1.0",
+    "react": "^19.1.1",
+    "react-dom": "^19.1.1",
+    "selfsigned": "^3.0.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.3",
+    "@types/node": "^22.17.0",
+    "@types/react": "^19.1.9",
+    "@types/react-dom": "^19.1.7",
+    "esbuild": "^0.25.8",
+    "typescript": "^5.9.2",
+    "vitest": "^3.2.4"
+  }
+}
