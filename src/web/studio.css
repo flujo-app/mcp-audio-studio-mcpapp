@@ -17,13 +17,26 @@
 }
 
 * { box-sizing: border-box; }
-html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; background: var(--bg); }
+/*
+  The document must be sized by its CONTENT, not by the frame it is in.
+  MCP App hosts embed the studio in a short placeholder iframe (FLUJO starts at
+  200px) and enlarge it only when the app reports a size. The ext-apps SDK derives
+  that size from the document element and watches html/body with a ResizeObserver,
+  so `height: 100%` here was self-defeating twice over: the studio reported the
+  host's placeholder height back to the host, and html/body could never change
+  size afterwards, so no further notification was ever sent. `min-height` keeps a
+  tall host filled while letting the document grow to the shell's real height.
+*/
+html, body, #root { width: 100%; height: auto; min-height: 100%; margin: 0; overflow: hidden; background: var(--bg); }
 button, input, select { font: inherit; }
 button { color: inherit; }
 button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--orange); outline-offset: 2px; }
 button { cursor: pointer; }
 
-.studio-shell { height: 100%; min-width: 920px; min-height: 650px; display: grid; grid-template-rows: 34px 68px minmax(300px, 1fr) 212px; color: var(--text); background: linear-gradient(155deg, #161920 0%, #101218 55%); }
+/* 100vh inside an iframe is the frame's own height, so once the host grants the
+   requested size this is a stable fixed point, and fullscreen/docked hosts that
+   already provide a tall frame are still filled edge to edge. */
+.studio-shell { height: 100vh; min-width: 920px; min-height: 650px; display: grid; grid-template-rows: 34px 68px minmax(300px, 1fr) 212px; color: var(--text); background: linear-gradient(155deg, #161920 0%, #101218 55%); }
 .titlebar { display: flex; align-items: center; gap: 22px; padding: 0 14px; border-bottom: 1px solid #292d36; background: #191c23; user-select: none; }
 .logo { display: flex; align-items: center; gap: 7px; min-width: 194px; }
 .logo > span { display: grid; place-items: center; width: 24px; height: 24px; border-radius: 7px 2px 7px 2px; background: linear-gradient(145deg, #ffbc5c, #ff7d36); color: #17191f; font-weight: 950; font-size: 10px; transform: skew(-7deg); box-shadow: 0 0 18px #ff9f4344; }
@@ -233,7 +246,9 @@ button { cursor: pointer; }
 .mixer-strip.master { background: #252a32; box-shadow: inset 2px 0 #4b515e; }
 .mixer-strip.master > b { color: #e0a45d; }
 
-.loading-screen { height: 100%; display: grid; place-items: center; align-content: center; gap: 8px; background: radial-gradient(circle, #2b2824 0, #12141a 52%); color: #b7bec9; }
+/* The first size report happens while this is on screen, so it must not be
+   shorter than the studio it is standing in for. */
+.loading-screen { height: 100vh; min-height: 650px; display: grid; place-items: center; align-content: center; gap: 8px; background: radial-gradient(circle, #2b2824 0, #12141a 52%); color: #b7bec9; }
 .loading-screen .brand-mark { display: grid; place-items: center; width: 54px; height: 54px; border-radius: 16px 4px; transform: skew(-7deg); background: var(--orange); color: #191b21; font-weight: 950; font-size: 28px; box-shadow: 0 0 35px #ff9f4355; }
 .loading-screen h1 { margin: 5px 0 0; font-size: 17px; letter-spacing: 3px; text-transform: uppercase; }
 .loading-screen p { margin: 0; color: #6f7886; font-size: 9px; text-transform: uppercase; }
