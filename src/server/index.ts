@@ -8,6 +8,7 @@ import express from "express";
 import selfsigned from "selfsigned";
 import studioHtml from "virtual:studio-html";
 import { createStudioRuntime, type StudioRuntime } from "./actions.js";
+import { isEntrypoint } from "./is-entrypoint.js";
 import { createStudioMcpServer } from "./mcp.js";
 
 type Mode = "stdio" | "http" | "https";
@@ -133,7 +134,7 @@ Environment:
   await startWeb(runtime, options.mode, options.host, options.port);
 }
 
-const invokedDirectly = process.argv[1] && new URL(import.meta.url).pathname.replace(/^\/(.:)/, "$1") === process.argv[1].replaceAll("\\", "/");
+const invokedDirectly = isEntrypoint(import.meta.url);
 const runningAsCompiledBunExecutable = Boolean((globalThis as Record<string, unknown>).Bun)
   && !/\.[cm]?[jt]sx?$/i.test(process.argv[1] ?? "");
 if (invokedDirectly || runningAsCompiledBunExecutable) {
