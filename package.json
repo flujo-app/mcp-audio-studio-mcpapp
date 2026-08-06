@@ -1,6 +1,6 @@
 {
   "name": "mcp-audio-studio",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "mcpName": "io.github.mario-andreschak/mcp-audio-studio",
   "description": "An MCP Apps digital audio workstation with sequencing, mixing, effects, automation, plugins, and WAV rendering.",
   "type": "module",

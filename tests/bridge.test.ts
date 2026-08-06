@@ -32,7 +32,7 @@ describe("MCP App bridge", () => {
 
     expect(STUDIO_DISPLAY_MODES).toEqual(["inline", "fullscreen", "pip"]);
     expect(mocks.appConstructor).toHaveBeenCalledWith(
-      { name: "MCP Audio Studio", version: "0.2.0" },
+      { name: "MCP Audio Studio", version: "0.2.1" },
       { availableDisplayModes: ["inline", "fullscreen", "pip"] },
     );
     expect(mocks.connect).toHaveBeenCalledOnce();

@@ -12,7 +12,7 @@ export const STUDIO_RESOURCE_URI = "ui://audio-studio/studio-v1.html";
 export function createStudioMcpServer(runtime: StudioRuntime): McpServer {
   const server = new McpServer({
     name: "MCP Audio Studio",
-    version: "0.2.0",
+    version: "0.2.1",
     description: "Interactive digital audio workstation with sequencing, mixing, effects, automation, plugins, and WAV rendering.",
   });
 
