@@ -13,7 +13,7 @@ export const STUDIO_DISPLAY_MODES: McpUiDisplayMode[] = ["inline", "fullscreen",
 const embedded = window.parent !== window;
 const app = embedded
   ? new App(
-      { name: "MCP Audio Studio", version: "0.1.0" },
+      { name: "MCP Audio Studio", version: "0.2.0" },
       { availableDisplayModes: STUDIO_DISPLAY_MODES },
     )
   : undefined;

@@ -32,11 +32,19 @@ jobs:
       - run: npm ci
       - run: npm run check
       - run: bun build ./dist/index.js --compile --outfile ${{ matrix.artifact }}
-      - run: test "$(./${{ matrix.artifact }} --version)" = "mcp-audio-studio 0.1.0"
+      # The expected version comes from package.json so a release cannot ship a
+      # binary that misreports itself; `npm run check` keeps the sources in sync.
+      - name: Verify the binary reports the released version
+        run: |
+          expected="mcp-audio-studio $(node -p "require('./package.json').version")"
+          actual="$(./${{ matrix.artifact }} --version)"
+          test "$actual" = "$expected" || { echo "Expected '$expected' but got '$actual'"; exit 1; }
         if: runner.os != 'Windows'
-      - run: |
-          $version = & ".\${{ matrix.artifact }}" --version
-          if ($version -ne "mcp-audio-studio 0.1.0") { throw "Unexpected version output: $version" }
+      - name: Verify the binary reports the released version
+        run: |
+          $expected = "mcp-audio-studio $(node -p "require('./package.json').version")"
+          $actual = & ".\${{ matrix.artifact }}" --version
+          if ($actual -ne $expected) { throw "Expected '$expected' but got '$actual'" }
         if: runner.os == 'Windows'
         shell: pwsh
       - uses: actions/upload-artifact@v7

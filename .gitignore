@@ -9,3 +9,5 @@ renders/
 .env.*
 !.env.example
 certs/
+# Pinned mcp-publisher binary downloaded by scripts/publish-mcp.mjs
+.tools/

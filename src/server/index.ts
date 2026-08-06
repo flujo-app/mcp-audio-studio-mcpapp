@@ -100,11 +100,11 @@ async function startWeb(runtime: StudioRuntime, mode: "http" | "https", host: st
 
 export async function main(argv = process.argv.slice(2)): Promise<void> {
   if (argv.includes("--version") || argv.includes("-v")) {
-    console.log("mcp-audio-studio 0.1.0");
+    console.log("mcp-audio-studio 0.2.0");
     return;
   }
   if (argv.includes("--help") || argv.includes("-h")) {
-    console.log(`MCP Audio Studio 0.1.0
+    console.log(`MCP Audio Studio 0.2.0
 
 Usage:
   mcp-audio-studio --stdio                 Start the MCP stdio transport (default)

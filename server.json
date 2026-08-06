@@ -1,0 +1,45 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.mario-andreschak/mcp-audio-studio",
+  "title": "MCP Audio Studio",
+  "description": "A digital audio workstation MCP App with sequencing, mixing, effects, automation, and rendering.",
+  "version": "0.2.0",
+  "repository": {
+    "url": "https://github.com/flujo-app/mcp-audio-studio-mcpapp",
+    "source": "github"
+  },
+  "icons": [
+    {
+      "src": "https://raw.githubusercontent.com/flujo-app/mcp-audio-studio-mcpapp/main/assets/icon.png",
+      "mimeType": "image/png",
+      "sizes": ["512x512"]
+    }
+  ],
+  "packages": [
+    {
+      "registryType": "npm",
+      "registryBaseUrl": "https://registry.npmjs.org",
+      "identifier": "mcp-audio-studio",
+      "version": "0.2.0",
+      "transport": {
+        "type": "stdio"
+      },
+      "packageArguments": [
+        {
+          "type": "named",
+          "name": "--stdio",
+          "description": "Run the MCP server over standard input and output.",
+          "isRequired": true
+        }
+      ],
+      "environmentVariables": [
+        {
+          "name": "MCP_AUDIO_STUDIO_DATA",
+          "description": "Path to a JSON file the studio project is persisted to. Omit to keep the project in memory.",
+          "format": "filepath",
+          "isRequired": false
+        }
+      ]
+    }
+  ]
+}
